@@ -1,6 +1,11 @@
-import sys
-from PySide2 import QtCore, QtGui, QtWidgets
-from PySide2.QtCore import Slot, Qt
+try:
+    # Maya 2025 and newer use Qt 6.
+    from PySide6 import QtCore, QtWidgets
+except ImportError:
+    # Keep the tool usable in Maya versions that still ship Qt 5.
+    from PySide2 import QtCore, QtWidgets
+
+Qt = QtCore.Qt
 import maya.cmds as cmds
 import  keyframeOffsetTool.utils as utils
 
@@ -35,7 +40,12 @@ class KeyframeOffsetUI(QtWidgets.QMainWindow):
 
     def setupUi(self):
         self.setObjectName("Form")
-        self.setWindowFlags(Qt.WindowStaysOnTopHint)
+        window_stays_on_top = (
+            Qt.WindowType.WindowStaysOnTopHint
+            if hasattr(Qt, "WindowType")
+            else Qt.WindowStaysOnTopHint
+        )
+        self.setWindowFlags(window_stays_on_top)
 
         # Apply a DPI-scaled stylesheet for inner widget padding and font size
         scale = _dpi_scale()
@@ -109,8 +119,18 @@ class KeyframeOffsetUI(QtWidgets.QMainWindow):
         self.sld_keyframe = QtWidgets.QSlider()
         self.sld_keyframe.setMinimum(-20)
         self.sld_keyframe.setMaximum(20)
-        self.sld_keyframe.setOrientation(QtCore.Qt.Horizontal)
-        self.sld_keyframe.setTickPosition(QtWidgets.QSlider.TicksAbove)
+        horizontal = (
+            Qt.Orientation.Horizontal
+            if hasattr(Qt, "Orientation")
+            else Qt.Horizontal
+        )
+        ticks_above = (
+            QtWidgets.QSlider.TickPosition.TicksAbove
+            if hasattr(QtWidgets.QSlider, "TickPosition")
+            else QtWidgets.QSlider.TicksAbove
+        )
+        self.sld_keyframe.setOrientation(horizontal)
+        self.sld_keyframe.setTickPosition(ticks_above)
         self.sld_keyframe.setTickInterval(1)
         self.sld_keyframe.setMinimumHeight(_scaled(30))
         self.sld_keyframe.setObjectName("sld_keyframe")
@@ -143,6 +163,7 @@ class KeyframeOffsetUI(QtWidgets.QMainWindow):
 
         self.globalvalue = 0
         self.is_get_time_slider_range = False
+        self._undo_chunk_open = False
         self.timeline_range = self.get_timeline();
         self.retranslateUi()
         self.interact()
@@ -158,30 +179,60 @@ class KeyframeOffsetUI(QtWidgets.QMainWindow):
         self.lb_offset.setText(_translate("Form", "Offset"))
 
     def keyframe_offset(self):
+        new_value = (
+            float(self.sld_keyframe.value() - self.oldvalue) * self._drag_step
+        )
+        previous_offset = float(self.oldvalue) * self._drag_step
 
-        if self.get_timeline_slider() != None:
-            self.is_get_time_slider_range = True
-            self.timeline_range = self.get_timeline_slider()  
-
-        if not self.is_get_time_slider_range:
-            self.timeline_range = [self.spin_in.value(), self.spin_out.value()]
-
-        self.new_value = (float(self.sld_keyframe.value() - self.oldvalue )*self.spin_steps.value())
-
-        utils.keyframe_offset(self.new_value,  self.timeline_range)
+        utils.keyframe_offset(
+            new_value,
+            self.timeline_range,
+            previous_offset,
+        )
         
         self.oldvalue  = self.sld_keyframe.value()
 
     def reset_value(self):
-        self.is_get_time_slider_range = False
+        try:
+            self.is_get_time_slider_range = False
 
-        if len(utils.get_selection())> 0:
-            self.globalvalue += self.sld_keyframe.value()
-            
-        self.sld_keyframe.setValue(0)
+            if len(utils.get_selection()) > 0:
+                self.globalvalue += self.sld_keyframe.value()
+
+            self.sld_keyframe.setValue(0)
+        finally:
+            self._close_undo_chunk()
 
     def slider_pressed(self):
         self.oldvalue = self.sld_keyframe.value()
+        self._drag_step = self.spin_steps.value()
+
+        slider_range = self.get_timeline_slider()
+        if slider_range is not None:
+            self.is_get_time_slider_range = True
+            self.timeline_range = slider_range
+        else:
+            self.is_get_time_slider_range = False
+            self.timeline_range = [self.spin_in.value(), self.spin_out.value()]
+
+        if not self._undo_chunk_open:
+            cmds.undoInfo(openChunk=True, chunkName="Keyframe Offset")
+            self._undo_chunk_open = True
+
+    def _close_undo_chunk(self):
+        if not self._undo_chunk_open:
+            return
+
+        try:
+            cmds.undoInfo(closeChunk=True)
+        finally:
+            self._undo_chunk_open = False
+
+    def closeEvent(self, event):
+        # Avoid leaving Maya's undo queue inside an open chunk if the window is
+        # closed while the slider is being dragged.
+        self._close_undo_chunk()
+        super(KeyframeOffsetUI, self).closeEvent(event)
 
     def get_timeline_slider(self):
         return utils.get_timeline_slider_range()
@@ -219,4 +270,3 @@ class KeyframeOffsetUI(QtWidgets.QMainWindow):
 
 if __name__ == "__main__":
     KeyframeOffsetUI.run()
-

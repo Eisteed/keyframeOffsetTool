@@ -27,17 +27,29 @@ def get_selection():
     #return the list of objects
     return selection
 
-def keyframe_offset(value, timeline_range):
-    #get timeline range
-    slider_range = timeline_range
+def keyframe_offset(value, timeline_range, previous_offset=0.0):
+    """Offset each selected object's keys in time by selection order."""
     selection = get_selection()
-    size = len(selection) or 0
-    
-    for obj in selection:
-        obj_index = selection.index(obj) + 1
-        try:
-            cmds.keyframe(obj, relative = True, at = get_channelbox_attributes(),
-             time = ((slider_range[0]), (slider_range[1])), timeChange = obj_index * value)
-        except:
-            cmds.keyframe(obj, relative = True, time = ((slider_range[0]), (slider_range[1])), timeChange = obj_index * value)
+    attributes = get_channelbox_attributes()
 
+    for obj_index, obj in enumerate(selection, start=1):
+        previous_object_offset = obj_index * previous_offset
+        current_range = (
+            timeline_range[0] + previous_object_offset,
+            timeline_range[1] + previous_object_offset,
+        )
+        edit_args = {
+            "edit": True,
+            "relative": True,
+            "time": current_range,
+            "timeChange": obj_index * value,
+        }
+
+        if attributes:
+            cmds.keyframe(
+                obj,
+                attribute=attributes,
+                **edit_args
+            )
+        else:
+            cmds.keyframe(obj, **edit_args)
